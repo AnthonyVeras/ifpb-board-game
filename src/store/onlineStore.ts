@@ -4,6 +4,18 @@ import type { PlayerColor, Position, MoveOption } from '../types'
 import { getRoomChannel, generateRoomCode, getPlayerId } from '../lib/supabaseClient'
 import { useGameStore } from './gameStore'
 
+// ─── Chat types ─────────────────────────────────────────────────────────────
+
+export interface ChatMessage {
+  id: string
+  playerId: string
+  playerName: string
+  playerColor: PlayerColor | null
+  text: string
+  isSystem: boolean
+  timestamp: number
+}
+
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export interface OnlinePlayer {
@@ -43,6 +55,9 @@ interface OnlineStore {
   status: RoomStatus
   errorMessage: string | null
 
+  // Chat
+  chatMessages: ChatMessage[]
+
   // Internal
   _channel: RealtimeChannel | null
 
@@ -51,6 +66,7 @@ interface OnlineStore {
   joinRoom: (code: string, playerName: string) => Promise<void>
   startGame: () => void
   sendAction: (action: GameAction) => void
+  sendChatMessage: (text: string) => void
   leaveRoom: () => void
   reset: () => void
 }
@@ -66,6 +82,7 @@ const DEFAULT_STATE = {
   players: [] as OnlinePlayer[],
   status: 'idle' as RoomStatus,
   errorMessage: null as string | null,
+  chatMessages: [] as ChatMessage[],
   _channel: null as RealtimeChannel | null,
 }
 
@@ -142,14 +159,21 @@ export const useOnlineStore = create<OnlineStore>((set, get) => ({
       color: COLOR_ORDER[i] as PlayerColor,
     }))
 
+    // Host decides who starts — broadcast to all clients
+    const activeColors = assignedPlayers.map(p => p.color!)
+    const startingColor = activeColors[Math.floor(Math.random() * activeColors.length)]
+
     _channel.send({
       type: 'broadcast',
       event: 'game_start',
-      payload: { players: assignedPlayers },
+      payload: { players: assignedPlayers, startingColor },
     })
 
-    // Also start locally
-    startGameLocally(assignedPlayers, set, get)
+    // Also start locally (with the same startingColor)
+    startGameLocally(assignedPlayers, startingColor, set, get)
+
+    // System message
+    addSystemMessage(set, get, '🎮 O jogo começou!')
   },
 
   sendAction: (action: GameAction) => {
@@ -164,6 +188,32 @@ export const useOnlineStore = create<OnlineStore>((set, get) => ({
       type: 'broadcast',
       event: 'game_action',
       payload: action,
+    })
+  },
+
+  sendChatMessage: (text: string) => {
+    const { _channel, myPlayerId, myName, myColor, status } = get()
+    if (!_channel || (status !== 'waiting' && status !== 'playing')) return
+    if (!text.trim()) return
+
+    const msg: ChatMessage = {
+      id: crypto.randomUUID(),
+      playerId: myPlayerId,
+      playerName: myName,
+      playerColor: myColor,
+      text: text.trim(),
+      isSystem: false,
+      timestamp: Date.now(),
+    }
+
+    // Add locally
+    set(s => ({ chatMessages: [...s.chatMessages, msg] }))
+
+    // Broadcast
+    _channel.send({
+      type: 'broadcast',
+      event: 'chat_message',
+      payload: msg,
     })
   },
 
@@ -190,7 +240,7 @@ export const useOnlineStore = create<OnlineStore>((set, get) => ({
 
 function setupChannelListeners(
   channel: RealtimeChannel,
-  set: (partial: Partial<OnlineStore>) => void,
+  set: (partial: Partial<OnlineStore> | ((s: OnlineStore) => Partial<OnlineStore>)) => void,
   get: () => OnlineStore,
 ) {
   // Presence sync — update player list
@@ -234,8 +284,12 @@ function setupChannelListeners(
 
   // Game start event
   channel.on('broadcast', { event: 'game_start' }, ({ payload }) => {
-    const { players: assignedPlayers } = payload as { players: OnlinePlayer[] }
-    startGameLocally(assignedPlayers, set, get)
+    const { players: assignedPlayers, startingColor } = payload as {
+      players: OnlinePlayer[]
+      startingColor: PlayerColor
+    }
+    startGameLocally(assignedPlayers, startingColor, set, get)
+    addSystemMessage(set, get, '🎮 O jogo começou!')
   })
 
   // Game action event — apply remote player's action
@@ -243,13 +297,20 @@ function setupChannelListeners(
     const action = payload as GameAction
     executeAction(action)
   })
+
+  // Chat message event
+  channel.on('broadcast', { event: 'chat_message' }, ({ payload }) => {
+    const msg = payload as ChatMessage
+    set(s => ({ chatMessages: [...s.chatMessages, msg] }))
+  })
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function startGameLocally(
   assignedPlayers: OnlinePlayer[],
-  set: (partial: Partial<OnlineStore>) => void,
+  startingColor: PlayerColor,
+  set: (partial: Partial<OnlineStore> | ((s: OnlineStore) => Partial<OnlineStore>)) => void,
   get: () => OnlineStore,
 ) {
   const myId = get().myPlayerId
@@ -261,7 +322,7 @@ function startGameLocally(
     status: 'playing',
   })
 
-  // Initialize the game store (enters 'arranging' phase locally)
+  // Initialize the game store with the host-determined starting color
   const gameStore = useGameStore.getState()
   const gamePlayers = assignedPlayers
     .filter(p => p.color !== null)
@@ -273,12 +334,29 @@ function startGameLocally(
       isActive: true,
     }))
 
-  gameStore.initGame(gamePlayers)
+  gameStore.initGame(gamePlayers, startingColor)
 
   // Skip arranging phase for online games — go straight to playing
   for (const p of gamePlayers) {
     useGameStore.getState().markReady(p.color)
   }
+}
+
+function addSystemMessage(
+  set: (partial: Partial<OnlineStore> | ((s: OnlineStore) => Partial<OnlineStore>)) => void,
+  _get: () => OnlineStore,
+  text: string,
+) {
+  const msg: ChatMessage = {
+    id: crypto.randomUUID(),
+    playerId: 'system',
+    playerName: 'Sistema',
+    playerColor: null,
+    text,
+    isSystem: true,
+    timestamp: Date.now(),
+  }
+  set(s => ({ chatMessages: [...s.chatMessages, msg] }))
 }
 
 function executeAction(action: GameAction) {

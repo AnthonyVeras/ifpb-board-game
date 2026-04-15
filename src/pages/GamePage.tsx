@@ -8,6 +8,7 @@ import { Board } from '../components/Board/Board'
 import { PlayerPanel } from '../components/UI/PlayerPanel'
 import { ConfirmMove } from '../components/UI/ConfirmMove'
 import { VictoryModal } from '../components/UI/VictoryModal'
+import { ChatPanel } from '../components/UI/ChatPanel'
 
 const COLOR_HEX: Record<string, string> = {
   red: '#E53935', blue: '#1E88E5', yellow: '#FDD835', green: '#43A047'
@@ -517,6 +518,9 @@ export function GamePage() {
               </ul>
             </div>
           )}
+
+          {/* Chat (online only) */}
+          {isOnline && <ChatPanel />}
         </div>
       </div>
 

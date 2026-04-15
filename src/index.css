@@ -258,3 +258,15 @@ body {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* ─── Chat Panel ────────────────────────────────────────────── */
+.chat-messages::-webkit-scrollbar {
+  width: 4px;
+}
+.chat-messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-messages::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 2px;
+}

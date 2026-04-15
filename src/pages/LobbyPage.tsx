@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useOnlineStore } from '../store/onlineStore'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
+import { ChatPanel } from '../components/UI/ChatPanel'
 
 const COLOR_HEX: Record<string, string> = {
   red: '#E53935',
@@ -604,6 +605,13 @@ export function LobbyPage() {
           </motion.div>
         )}
       </motion.div>
+
+      {/* Chat in lobby */}
+      {isInLobby && (
+        <div style={{ width: '100%', maxWidth: 480, marginTop: 20 }}>
+          <ChatPanel />
+        </div>
+      )}
     </div>
   )
 }

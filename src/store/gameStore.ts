@@ -9,7 +9,7 @@ import { posEq, getHomeBaseCells } from '../lib/boardUtils'
 
 interface GameStore extends GameState {
   // Setup
-  initGame: (players: Player[]) => void
+  initGame: (players: Player[], startingColor?: PlayerColor) => void
   resetGame: () => void
 
   // Arranging phase (pre-game piece redistribution)
@@ -62,14 +62,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
   _pendingCapturedCircles: [],
   _pathJumpedOverSets: [],
 
-  initGame: (players: Player[]) => {
+  initGame: (players: Player[], startingColor?: PlayerColor) => {
     const activePlayers = players.map(p => p.color)
     const board = initBoard(activePlayers)
-    const randomStart = activePlayers[Math.floor(Math.random() * activePlayers.length)]
+    const firstTurn = startingColor ?? activePlayers[Math.floor(Math.random() * activePlayers.length)]
     set({
       board,
       players,
-      currentTurn: randomStart,
+      currentTurn: firstTurn,
       selectedPiece: null,
       validMoves: [],
       validJumps: [],
