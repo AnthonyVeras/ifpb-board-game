@@ -1,4 +1,5 @@
 import { useEffect, useCallback } from 'react'
+import { useWindowWidth } from '../../lib/hooks'
 import { LayoutGroup, AnimatePresence, motion } from 'framer-motion'
 import type { Position } from '../../types'
 import { useGameStore } from '../../store/gameStore'
@@ -7,9 +8,9 @@ import { posEq, getHomeBaseCells } from '../../lib/boardUtils'
 import { Cell } from './Cell'
 import { PathOverlay } from './PathOverlay'
 
-const CELL_SIZE = 64  // px per cell
-
 export function Board() {
+  const windowWidth = useWindowWidth()
+  const CELL_SIZE = Math.min(64, Math.floor((Math.min(windowWidth, 900) - 32) / 10))
   const {
     board,
     selectedPiece,
@@ -250,4 +251,3 @@ export function Board() {
   )
 }
 
-export { CELL_SIZE }

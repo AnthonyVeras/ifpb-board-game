@@ -123,7 +123,7 @@ export function HomePage() {
         <button
           className="btn btn-primary"
           onClick={() => navigate('/setup')}
-          style={{ width: 280, padding: '15px 0', fontSize: 17, fontWeight: 700 }}
+          style={{ width: '100%', maxWidth: 280, padding: '15px 0', fontSize: 17, fontWeight: 700 }}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M14.5 4.5L20 10M20 10L14.5 15.5M20 10H4" />
@@ -134,7 +134,7 @@ export function HomePage() {
         <button
           className="btn btn-secondary"
           onClick={() => navigate('/lobby')}
-          style={{ width: 280, padding: '14px 0', fontSize: 16 }}
+          style={{ width: '100%', maxWidth: 280, padding: '14px 0', fontSize: 16 }}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10" />
@@ -147,7 +147,7 @@ export function HomePage() {
         <button
           className="btn btn-secondary"
           onClick={() => navigate('/rules')}
-          style={{ width: 280, padding: '14px 0', fontSize: 16 }}
+          style={{ width: '100%', maxWidth: 280, padding: '14px 0', fontSize: 16 }}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />

@@ -97,7 +97,7 @@ export function LobbyPage() {
   }
 
   const isInLobby = status === 'waiting'
-  const canStart = isHost && players.length >= 2 && players.length <= 4
+  const canStart = isHost && (players.length === 2 || players.length === 4)
 
   return (
     <div style={{
@@ -552,8 +552,10 @@ export function LobbyPage() {
                   }}
                 >
                   {players.length < 2
-                    ? 'Aguardando 2+ jogadores...'
-                    : `Iniciar Jogo (${players.length} jogadores) →`
+                    ? 'Aguardando jogadores...'
+                    : players.length === 3
+                      ? 'Precisa de 2 ou 4 jogadores'
+                      : `Iniciar Jogo (${players.length} jogadores) →`
                   }
                 </button>
               )}

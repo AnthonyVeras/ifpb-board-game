@@ -24,7 +24,7 @@ interface Props {
 
 export function PlayerPanel({ players, currentTurn, winner }: Props) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 220 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <h3 style={{
         color: 'var(--text-muted)',
         margin: '0 0 4px',

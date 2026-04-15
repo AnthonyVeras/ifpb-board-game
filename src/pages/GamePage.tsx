@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { useWindowWidth } from '../lib/hooks'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useGameStore } from '../store/gameStore'
@@ -25,6 +26,9 @@ export function GamePage() {
     status: onlineStatus, myColor, leaveRoom, players: onlinePlayers,
     sendAction,
   } = useOnlineStore()
+
+  const windowWidth = useWindowWidth()
+  const isMobile = windowWidth < 900
 
   const isOnline = onlineStatus === 'playing'
   const isMyTurn = !isOnline || currentTurn === myColor
@@ -251,10 +255,11 @@ export function GamePage() {
       {/* Main game area */}
       <div style={{
         display: 'flex',
-        gap: 28,
-        alignItems: 'flex-start',
+        flexDirection: isMobile ? 'column' : 'row',
+        gap: isMobile ? 16 : 28,
+        alignItems: isMobile ? 'center' : 'flex-start',
         width: '100%',
-        maxWidth: 920,
+        maxWidth: isMobile ? '100%' : 920,
       }}>
         {/* Board + controls */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
@@ -277,9 +282,10 @@ export function GamePage() {
           display: 'flex',
           flexDirection: 'column',
           gap: 16,
-          minWidth: 220,
-          position: 'sticky',
-          top: 20,
+          width: isMobile ? '100%' : undefined,
+          minWidth: isMobile ? undefined : 220,
+          position: isMobile ? 'static' : 'sticky',
+          top: isMobile ? undefined : 20,
         }}>
           <PlayerPanel
             players={players}

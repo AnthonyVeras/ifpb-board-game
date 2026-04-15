@@ -86,7 +86,7 @@ export function SetupPage() {
             Número de Jogadores
           </label>
           <div style={{ display: 'flex', gap: 8 }}>
-            {[2, 3, 4].map(n => (
+            {[2, 4].map(n => (
               <button
                 key={n}
                 onClick={() => setPlayerCount(n)}
