@@ -53,6 +53,22 @@ export const MAX_ONLINE_PLAYERS = 4
 export const ONLINE_RECONNECT_WINDOW_MS = 3 * 60 * 1000
 export const MAX_CHAT_MESSAGES = 100
 
+function getOnlineSchemaErrorMessage(): string {
+  return 'O schema novo do multiplayer ainda não foi aplicado no Supabase. Rode a migration supabase/migrations/202604150001_authoritative_multiplayer.sql.'
+}
+
+function isMissingTableError(error: PostgrestError | null): boolean {
+  return error?.code === 'PGRST205' || error?.code === '42P01'
+}
+
+function throwFriendlyError(error: PostgrestError | null, fallbackMessage: string): never {
+  if (isMissingTableError(error)) {
+    throw new Error(getOnlineSchemaErrorMessage())
+  }
+
+  throw new Error(fallbackMessage)
+}
+
 function nowIso(): string {
   return new Date().toISOString()
 }
@@ -87,7 +103,7 @@ async function fetchRoomRowByCode(roomCode: string): Promise<RoomRow | null> {
     .maybeSingle()
 
   if (error) {
-    throw new Error('Não foi possível localizar a sala agora.')
+    throwFriendlyError(error, 'Não foi possível localizar a sala agora.')
   }
 
   return data as RoomRow | null
@@ -101,7 +117,7 @@ async function fetchRoomRowById(roomId: string): Promise<RoomRow | null> {
     .maybeSingle()
 
   if (error) {
-    throw new Error('Não foi possível carregar a sala agora.')
+    throwFriendlyError(error, 'Não foi possível carregar a sala agora.')
   }
 
   return data as RoomRow | null
@@ -116,7 +132,7 @@ async function fetchRoomPlayers(roomId: string): Promise<RoomPlayerRow[]> {
     .order('slot_index', { ascending: true })
 
   if (error) {
-    throw new Error('Não foi possível carregar os jogadores da sala.')
+    throwFriendlyError(error, 'Não foi possível carregar os jogadores da sala.')
   }
 
   return (data ?? []) as RoomPlayerRow[]
@@ -132,7 +148,7 @@ async function fetchMatchRow(roomId: string, matchId: string | null): Promise<Ma
     : await query.eq('room_id', roomId).maybeSingle()
 
   if (error) {
-    throw new Error('Não foi possível carregar a partida.')
+    throwFriendlyError(error, 'Não foi possível carregar a partida.')
   }
 
   return data as MatchRow | null
@@ -146,7 +162,7 @@ async function fetchMatchState(matchId: string): Promise<MatchStateRow | null> {
     .maybeSingle()
 
   if (error) {
-    throw new Error('Não foi possível carregar o estado da partida.')
+    throwFriendlyError(error, 'Não foi possível carregar o estado da partida.')
   }
 
   return data as MatchStateRow | null
@@ -288,6 +304,9 @@ export async function createRoomRecord(playerId: string, playerName: string): Pr
     }
 
     if (roomError || !room) {
+      if (roomError) {
+        throwFriendlyError(roomError, 'Falha ao criar a sala online.')
+      }
       throw new Error('Falha ao criar a sala online.')
     }
 
@@ -306,7 +325,7 @@ export async function createRoomRecord(playerId: string, playerName: string): Pr
 
     if (playerError) {
       await getSupabase().from('rooms').delete().eq('id', room.id)
-      throw new Error('Falha ao registrar o host da sala.')
+      throwFriendlyError(playerError, 'Falha ao registrar o host da sala.')
     }
 
     const snapshot = await fetchOnlineRoomSnapshot(room.room_code)
@@ -405,7 +424,7 @@ export async function joinRoomRecord(
     }
 
     if (error) {
-      throw new Error('Falha ao entrar na sala.')
+      throwFriendlyError(error, 'Falha ao entrar na sala.')
     }
   }
 
@@ -472,6 +491,9 @@ export async function startOnlineMatch(
     .single()
 
   if (matchError || !match) {
+    if (matchError) {
+      throwFriendlyError(matchError, 'Não foi possível iniciar a partida online.')
+    }
     throw new Error('Não foi possível iniciar a partida online.')
   }
 
@@ -486,7 +508,7 @@ export async function startOnlineMatch(
     })
 
   if (matchStateError) {
-    throw new Error('A partida foi criada, mas o estado inicial falhou.')
+    throwFriendlyError(matchStateError, 'A partida foi criada, mas o estado inicial falhou.')
   }
 
   await getSupabase()
@@ -531,7 +553,7 @@ export async function persistOnlineSnapshot(
     .maybeSingle()
 
   if (error) {
-    throw new Error('Falha ao sincronizar a jogada com o servidor.')
+    throwFriendlyError(error, 'Falha ao sincronizar a jogada com o servidor.')
   }
 
   if (!updatedState) {
