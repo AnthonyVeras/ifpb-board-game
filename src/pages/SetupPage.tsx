@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import type { Player, PlayerColor } from '../types'
+import { sanitizePlayerName, validatePlayerNameList } from '../lib/playerNames'
 import { useGameStore } from '../store/gameStore'
 
 const COLORS: PlayerColor[] = ['red', 'blue', 'yellow', 'green']
@@ -11,13 +12,6 @@ const COLOR_LABELS: Record<PlayerColor, string> = {
 const COLOR_HEX: Record<PlayerColor, string> = {
   red: '#E53935', blue: '#1E88E5', yellow: '#FDD835', green: '#43A047'
 }
-const TIMER_OPTIONS = [
-  { label: 'Ilimitado', value: null },
-  { label: '15s', value: 15000 },
-  { label: '30s', value: 30000 },
-  { label: '60s', value: 60000 },
-]
-
 export function SetupPage() {
   const navigate = useNavigate()
   const initGame = useGameStore(s => s.initGame)
@@ -26,18 +20,27 @@ export function SetupPage() {
   const [names, setNames] = useState<Record<PlayerColor, string>>({
     red: 'Jogador 1', blue: 'Jogador 2', yellow: 'Jogador 3', green: 'Jogador 4'
   })
-  const [timerMs, setTimerMs] = useState<number | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
 
   const activeColors = COLORS.slice(0, playerCount)
 
   const handleStart = () => {
+    const activeNames = activeColors.map(color => sanitizePlayerName(names[color]))
+    const validationError = validatePlayerNameList(activeNames)
+
+    if (validationError) {
+      setFormError(validationError)
+      return
+    }
+
     const players: Player[] = activeColors.map(c => ({
       color: c,
-      name: names[c],
-      timerMs,
-      timeLeft: timerMs,
+      name: sanitizePlayerName(names[c]),
+      timerMs: null,
+      timeLeft: null,
       isActive: true,
     }))
+    setFormError(null)
     initGame(players)
     navigate('/game')
   }
@@ -157,47 +160,32 @@ export function SetupPage() {
           </div>
         </div>
 
-        {/* Timer */}
-        <div style={{ marginBottom: 36 }}>
-          <label style={{
-            color: 'var(--text-muted)',
-            fontSize: 11,
-            textTransform: 'uppercase',
-            letterSpacing: 1.5,
-            display: 'block',
-            marginBottom: 10,
-            fontWeight: 600,
-          }}>
-            Tempo por Jogada
-          </label>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {TIMER_OPTIONS.map(opt => (
-              <button
-                key={String(opt.value)}
-                onClick={() => setTimerMs(opt.value)}
-                style={{
-                  flex: 1,
-                  padding: '12px 0',
-                  borderRadius: 8,
-                  border: timerMs === opt.value
-                    ? '2px solid var(--blue)'
-                    : '1px solid var(--border-medium)',
-                  backgroundColor: timerMs === opt.value
-                    ? 'rgba(30,136,229,0.12)'
-                    : 'var(--bg-card)',
-                  color: timerMs === opt.value ? 'var(--blue)' : 'var(--text-muted)',
-                  cursor: 'pointer',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  transition: 'all 0.15s',
-                  fontFamily: 'var(--font)',
-                }}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+        <div style={{
+          marginBottom: 36,
+          padding: '12px 14px',
+          borderRadius: 10,
+          backgroundColor: 'rgba(30,136,229,0.08)',
+          border: '1px solid rgba(30,136,229,0.18)',
+          color: 'var(--text-muted)',
+          fontSize: 12,
+          lineHeight: 1.6,
+        }}>
+          O temporizador por jogada foi removido da configuração até a sincronização online ficar pronta.
         </div>
+
+        {formError && (
+          <div style={{
+            marginBottom: 20,
+            padding: '12px 14px',
+            borderRadius: 10,
+            backgroundColor: 'rgba(229,57,53,0.1)',
+            border: '1px solid rgba(229,57,53,0.28)',
+            color: 'var(--red)',
+            fontSize: 13,
+          }}>
+            {formError}
+          </div>
+        )}
 
         {/* Action buttons */}
         <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>

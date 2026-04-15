@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
+import { loadOnlineRoomSession } from '../lib/onlineSession'
+import { sanitizePlayerName, validatePlayerName } from '../lib/playerNames'
 import { useOnlineStore } from '../store/onlineStore'
 import { isSupabaseConfigured } from '../lib/supabaseClient'
 import { ChatPanel } from '../components/UI/ChatPanel'
@@ -22,11 +24,13 @@ const COLOR_LABELS: Record<string, string> = {
 export function LobbyPage() {
   const navigate = useNavigate()
   const { roomCode: urlCode } = useParams<{ roomCode: string }>()
+  const persistedSession = loadOnlineRoomSession()
 
-  const [playerName, setPlayerName] = useState('')
+  const [playerName, setPlayerName] = useState(persistedSession?.playerName ?? '')
   const [joinCode, setJoinCode] = useState(urlCode?.toUpperCase() ?? '')
   const [mode, setMode] = useState<'none' | 'create' | 'join'>(urlCode ? 'join' : 'none')
   const [copied, setCopied] = useState(false)
+  const [localError, setLocalError] = useState<string | null>(null)
 
   const {
     roomCode,
@@ -34,61 +38,73 @@ export function LobbyPage() {
     players,
     status,
     myColor,
+    hasRestorableSession,
     errorMessage,
     createRoom,
     joinRoom,
+    restoreSession,
     startGame,
     leaveRoom,
+    refreshRestorableSession,
   } = useOnlineStore()
 
   const configured = isSupabaseConfigured()
 
-  // Auto-join if URL has room code and we get a name
-  useEffect(() => {
-    if (urlCode && playerName && status === 'idle') {
-      setMode('join')
-      setJoinCode(urlCode.toUpperCase())
-    }
-  }, [urlCode, playerName, status])
-
   // Navigate to game when game starts
   useEffect(() => {
-    if (status === 'playing') {
+    if (status === 'playing' || status === 'paused' || status === 'finished') {
       navigate('/game')
     }
   }, [status, navigate])
 
-  // Cleanup on unmount if still waiting
   useEffect(() => {
-    return () => {
-      const currentStatus = useOnlineStore.getState().status
-      if (currentStatus === 'waiting' || currentStatus === 'creating' || currentStatus === 'joining') {
-        // Don't leave if game is playing
-      }
-    }
-  }, [])
+    refreshRestorableSession()
+  }, [refreshRestorableSession])
 
   const handleCreate = async () => {
-    if (!playerName.trim()) return
-    await createRoom(playerName.trim())
+    const sanitizedName = sanitizePlayerName(playerName)
+    const validationError = validatePlayerName(sanitizedName)
+    if (validationError) {
+      setLocalError(validationError)
+      return
+    }
+
+    setLocalError(null)
+    await createRoom(sanitizedName)
   }
 
   const handleJoin = async () => {
-    if (!playerName.trim() || joinCode.length < 6) return
-    await joinRoom(joinCode, playerName.trim())
+    const sanitizedName = sanitizePlayerName(playerName)
+    const validationError = validatePlayerName(sanitizedName)
+    if (validationError) {
+      setLocalError(validationError)
+      return
+    }
+    if (joinCode.length < 6) return
+
+    setLocalError(null)
+    await joinRoom(joinCode, sanitizedName)
+  }
+
+  const handleResume = async () => {
+    setLocalError(null)
+    const restored = await restoreSession(urlCode?.toUpperCase())
+    if (!restored && !useOnlineStore.getState().errorMessage) {
+      setLocalError('Não foi possível retomar a última sala.')
+    }
   }
 
   const handleCopyCode = () => {
     if (roomCode) {
-      navigator.clipboard.writeText(roomCode)
+      void navigator.clipboard.writeText(roomCode)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     }
   }
 
-  const handleBack = () => {
+  const handleBack = async () => {
     if (status === 'waiting') {
-      leaveRoom()
+      await leaveRoom()
     }
     if (mode !== 'none') {
       setMode('none')
@@ -111,7 +127,7 @@ export function LobbyPage() {
     }}>
       <button
         className="btn btn-ghost"
-        onClick={handleBack}
+        onClick={() => { void handleBack() }}
         style={{ position: 'absolute', top: 24, left: 24, padding: '8px 14px', fontSize: 13 }}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -178,7 +194,10 @@ export function LobbyPage() {
               </label>
               <input
                 value={playerName}
-                onChange={e => setPlayerName(e.target.value.slice(0, 20))}
+                onChange={e => {
+                  setPlayerName(e.target.value.slice(0, 20))
+                  if (localError) setLocalError(null)
+                }}
                 placeholder="Digite seu nome..."
                 style={{
                   width: '100%',
@@ -201,6 +220,23 @@ export function LobbyPage() {
 
             {/* Mode buttons */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {hasRestorableSession && (
+                <button
+                  onClick={() => { void handleResume() }}
+                  className="btn btn-secondary"
+                  style={{
+                    padding: '14px 0',
+                    fontSize: 15,
+                    width: '100%',
+                    background: 'rgba(67,160,71,0.08)',
+                    border: '1px solid rgba(67,160,71,0.25)',
+                    color: 'var(--green)',
+                  }}
+                >
+                  Retomar Última Sala
+                </button>
+              )}
+
               <button
                 onClick={() => setMode('create')}
                 disabled={!configured || !playerName.trim()}
@@ -336,7 +372,7 @@ export function LobbyPage() {
         </AnimatePresence>
 
         {/* ─── Error message ──────────────────────────────────────── */}
-        {errorMessage && (
+        {(localError || errorMessage) && (
           <motion.div
             initial={{ opacity: 0, y: -8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -351,7 +387,7 @@ export function LobbyPage() {
               textAlign: 'left',
             }}
           >
-            ❌ {errorMessage}
+            ❌ {localError ?? errorMessage}
           </motion.div>
         )}
 
@@ -532,7 +568,12 @@ export function LobbyPage() {
             <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
               <button
                 className="btn btn-ghost"
-                onClick={() => { leaveRoom(); setMode('none') }}
+                onClick={() => {
+                  void (async () => {
+                    await leaveRoom()
+                    setMode('none')
+                  })()
+                }}
                 style={{ flex: 1, padding: '14px 0', fontSize: 14 }}
               >
                 Sair

@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import type { PlayerColor } from '../../types'
-import confetti from 'canvas-confetti'
 
 const COLOR_NAMES: Record<PlayerColor, string> = {
   red: 'Vermelho',
@@ -29,25 +28,36 @@ export function VictoryModal({ winner, players, onPlayAgain, onHome }: Props) {
   const winnerColor = COLORS[winner]
 
   useEffect(() => {
-    const end = Date.now() + 4000
-    const frame = () => {
-      confetti({
-        particleCount: 4,
-        angle: 60,
-        spread: 65,
-        origin: { x: 0, y: 0.6 },
-        colors: [winnerColor, '#ffffff', '#ffd700'],
-      })
-      confetti({
-        particleCount: 4,
-        angle: 120,
-        spread: 65,
-        origin: { x: 1, y: 0.6 },
-        colors: [winnerColor, '#ffffff', '#ffd700'],
-      })
-      if (Date.now() < end) requestAnimationFrame(frame)
+    let cancelled = false
+
+    void import('canvas-confetti').then(({ default: confetti }) => {
+      if (cancelled) return
+
+      const end = Date.now() + 4000
+      const frame = () => {
+        confetti({
+          particleCount: 4,
+          angle: 60,
+          spread: 65,
+          origin: { x: 0, y: 0.6 },
+          colors: [winnerColor, '#ffffff', '#ffd700'],
+        })
+        confetti({
+          particleCount: 4,
+          angle: 120,
+          spread: 65,
+          origin: { x: 1, y: 0.6 },
+          colors: [winnerColor, '#ffffff', '#ffd700'],
+        })
+        if (Date.now() < end && !cancelled) requestAnimationFrame(frame)
+      }
+
+      frame()
+    })
+
+    return () => {
+      cancelled = true
     }
-    frame()
   }, [winner, winnerColor])
 
   return (

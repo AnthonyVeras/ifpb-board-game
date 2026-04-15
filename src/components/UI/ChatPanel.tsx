@@ -18,7 +18,15 @@ export function ChatPanel() {
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const container = scrollContainerRef.current
+    if (!container) return
+
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+    const shouldStickToBottom = distanceFromBottom < 80
+
+    if (shouldStickToBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: chatMessages.length > 1 ? 'smooth' : 'auto' })
+    }
   }, [chatMessages.length])
 
   const handleSend = () => {
@@ -34,7 +42,7 @@ export function ChatPanel() {
     }
   }
 
-  const isEnabled = status === 'waiting' || status === 'playing'
+  const isEnabled = status === 'waiting' || status === 'playing' || status === 'paused' || status === 'finished'
 
   return (
     <div className="chat-panel card" style={{

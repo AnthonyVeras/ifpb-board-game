@@ -3,6 +3,7 @@ import type { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? ''
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? ''
+const PLAYER_ID_STORAGE_KEY = 'ifpb_player_id'
 
 // Lazy singleton — only created when actually needed (avoids crash when env vars are missing)
 let _supabase: SupabaseClient | null = null
@@ -21,12 +22,12 @@ export function isSupabaseConfigured(): boolean {
   return supabaseUrl.length > 0 && supabaseAnonKey.length > 0
 }
 
-// Generate a unique player ID for this browser session
+// Generate a stable player ID for this browser so refreshes can resume the match
 export function getPlayerId(): string {
-  let id = sessionStorage.getItem('ifpb_player_id')
+  let id = localStorage.getItem(PLAYER_ID_STORAGE_KEY)
   if (!id) {
     id = crypto.randomUUID()
-    sessionStorage.setItem('ifpb_player_id', id)
+    localStorage.setItem(PLAYER_ID_STORAGE_KEY, id)
   }
   return id
 }

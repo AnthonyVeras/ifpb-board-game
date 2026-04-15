@@ -1,5 +1,13 @@
 import { create } from 'zustand'
-import type { GameState, Position, Player, PlayerColor, MoveOption, Piece } from '../types'
+import type {
+  CapturedCircleEvent,
+  GameSnapshot,
+  GameState,
+  MoveOption,
+  Player,
+  PlayerColor,
+  Position,
+} from '../types'
 import {
   initBoard, getAllMoves, getContinuationJumps,
   applyMove, placeCircleAtBase, checkWin, getNextTurn,
@@ -11,6 +19,8 @@ interface GameStore extends GameState {
   // Setup
   initGame: (players: Player[], startingColor?: PlayerColor) => void
   resetGame: () => void
+  getSnapshot: () => GameSnapshot
+  loadSnapshot: (snapshot: GameSnapshot) => void
 
   // Arranging phase (pre-game piece redistribution)
   arrangingSelectedPiece: Position | null
@@ -29,12 +39,12 @@ interface GameStore extends GameState {
 
   // Internal
   _currentMoveOptions: MoveOption[]
-  _pendingCapturedCircles: { piece: Piece; capturedBy: PlayerColor }[]
+  _pendingCapturedCircles: CapturedCircleEvent[]
   _pathJumpedOverSets: Position[][]
 }
 
 const DEFAULT_STATE: Omit<GameStore,
-  'initGame' | 'resetGame' | 'selectPiece' | 'applyMoveOption' |
+  'initGame' | 'resetGame' | 'getSnapshot' | 'loadSnapshot' | 'selectPiece' | 'applyMoveOption' |
   'undoLastStep' | 'confirmMove' | 'placeReturnedCircle' |
   'selectArrangingPiece' | 'swapPieces' | 'markReady' |
   '_currentMoveOptions' | '_pendingCapturedCircles' | '_pathJumpedOverSets'
@@ -89,6 +99,54 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   resetGame: () => set({ ...DEFAULT_STATE, _currentMoveOptions: [], _pendingCapturedCircles: [], _pathJumpedOverSets: [] }),
+
+  getSnapshot: () => {
+    const state = get()
+
+    return {
+      board: state.board,
+      players: state.players,
+      currentTurn: state.currentTurn,
+      selectedPiece: state.selectedPiece,
+      validMoves: state.validMoves,
+      validJumps: state.validJumps,
+      currentPath: state.currentPath,
+      pathJumpedOver: state.pathJumpedOver,
+      phase: state.phase,
+      winner: state.winner,
+      capturedCircleEvent: state.capturedCircleEvent,
+      lastMove: state.lastMove,
+      arrangingSelectedPiece: state.arrangingSelectedPiece,
+      readyPlayers: state.readyPlayers,
+      arrangingCurrentPlayer: state.arrangingCurrentPlayer,
+      currentMoveOptions: state._currentMoveOptions,
+      pendingCapturedCircles: state._pendingCapturedCircles,
+      pathJumpedOverSets: state._pathJumpedOverSets,
+    }
+  },
+
+  loadSnapshot: (snapshot: GameSnapshot) => {
+    set({
+      board: snapshot.board,
+      players: snapshot.players,
+      currentTurn: snapshot.currentTurn,
+      selectedPiece: snapshot.selectedPiece,
+      validMoves: snapshot.validMoves,
+      validJumps: snapshot.validJumps,
+      currentPath: snapshot.currentPath,
+      pathJumpedOver: snapshot.pathJumpedOver,
+      phase: snapshot.phase,
+      winner: snapshot.winner,
+      capturedCircleEvent: snapshot.capturedCircleEvent,
+      lastMove: snapshot.lastMove,
+      arrangingSelectedPiece: snapshot.arrangingSelectedPiece,
+      readyPlayers: snapshot.readyPlayers,
+      arrangingCurrentPlayer: snapshot.arrangingCurrentPlayer,
+      _currentMoveOptions: snapshot.currentMoveOptions,
+      _pendingCapturedCircles: snapshot.pendingCapturedCircles,
+      _pathJumpedOverSets: snapshot.pathJumpedOverSets,
+    })
+  },
 
   // ─── Arranging phase actions ─────────────────────────────────────────────────
 
@@ -409,7 +467,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   placeReturnedCircle: (pos: Position) => {
-    const { board, capturedCircleEvent, _pendingCapturedCircles, currentTurn, players } = get()
+    const { board, capturedCircleEvent, _pendingCapturedCircles, currentTurn, players, lastMove } = get()
     if (!capturedCircleEvent) return
 
     // Verify pos is a valid empty home base slot for the circle's owner
@@ -427,13 +485,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       })
     } else {
       // Done with circle returns — check win and advance turn
-      const didWin = checkWin(newBoard, currentTurn)
-      const nextTurn = getNextTurn(players, currentTurn)
+      const movingColor = lastMove?.color ?? currentTurn
+      const didWin = checkWin(newBoard, movingColor)
+      const nextTurn = getNextTurn(players, movingColor)
       set({
         board: newBoard,
         phase: didWin ? 'finished' : 'playing',
-        winner: didWin ? currentTurn : null,
-        currentTurn: didWin ? currentTurn : nextTurn,
+        winner: didWin ? movingColor : null,
+        currentTurn: didWin ? movingColor : nextTurn,
         capturedCircleEvent: null,
         _pendingCapturedCircles: [],
       })

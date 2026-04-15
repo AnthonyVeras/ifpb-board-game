@@ -1,10 +1,22 @@
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { useOnlineStore } from '../store/onlineStore'
 
 const PLAYER_COLORS = ['#E53935', '#1E88E5', '#FDD835', '#43A047']
 
 export function HomePage() {
   const navigate = useNavigate()
+  const hasRestorableSession = useOnlineStore(s => s.hasRestorableSession)
+  const refreshRestorableSession = useOnlineStore(s => s.refreshRestorableSession)
+
+  useEffect(() => {
+    refreshRestorableSession()
+
+    const handleFocus = () => refreshRestorableSession()
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [refreshRestorableSession])
 
   return (
     <div style={{
@@ -146,6 +158,27 @@ export function HomePage() {
           </svg>
           Jogar Online
         </button>
+
+        {hasRestorableSession && (
+          <button
+            className="btn btn-secondary"
+            onClick={() => navigate('/game')}
+            style={{
+              width: '100%',
+              padding: '18px 32px',
+              fontSize: 16,
+              background: 'rgba(67,160,71,0.08)',
+              borderColor: 'rgba(67,160,71,0.28)',
+              color: 'var(--green)',
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+              <path d="M3 3v5h5" />
+            </svg>
+            Retomar Partida Online
+          </button>
+        )}
 
         <button
           className="btn btn-secondary"

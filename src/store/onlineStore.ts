@@ -1,10 +1,29 @@
 import { create } from 'zustand'
 import type { RealtimeChannel } from '@supabase/supabase-js'
-import type { PlayerColor, Position, MoveOption } from '../types'
-import { getRoomChannel, generateRoomCode, getPlayerId } from '../lib/supabaseClient'
+import type {
+  GameSnapshot,
+  MoveOption,
+  OnlinePlayerState,
+  Player,
+  PlayerColor,
+  Position,
+} from '../types'
+import {
+  fetchOnlineRoomSnapshot,
+  createRoomRecord,
+  disconnectOnlinePlayer,
+  joinRoomRecord,
+  leaveOnlineRoom,
+  markPlayerConnected,
+  MAX_CHAT_MESSAGES,
+  persistOnlineSnapshot,
+  resumePausedMatchIfReady,
+  startOnlineMatch,
+} from '../lib/onlineApi'
+import { clearOnlineRoomSession, loadOnlineRoomSession, saveOnlineRoomSession } from '../lib/onlineSession'
+import { sanitizePlayerName } from '../lib/playerNames'
+import { getPlayerId, getRoomChannel } from '../lib/supabaseClient'
 import { useGameStore } from './gameStore'
-
-// ─── Chat types ─────────────────────────────────────────────────────────────
 
 export interface ChatMessage {
   id: string
@@ -16,24 +35,20 @@ export interface ChatMessage {
   timestamp: number
 }
 
-// ─── Types ─────────────────────────────────────────────────────────────────────
-
-export interface OnlinePlayer {
-  id: string
-  name: string
-  color: PlayerColor | null
-}
+export type OnlinePlayer = OnlinePlayerState
 
 export type RoomStatus =
   | 'idle'
   | 'creating'
   | 'joining'
-  | 'waiting'    // in lobby, waiting for players / host to start
+  | 'syncing'
+  | 'waiting'
   | 'playing'
+  | 'paused'
+  | 'finished'
   | 'disconnected'
   | 'error'
 
-// Actions that get broadcast between players
 export type GameAction =
   | { type: 'select_piece'; pos: Position }
   | { type: 'apply_move'; option: MoveOption }
@@ -44,9 +59,19 @@ export type GameAction =
   | { type: 'mark_ready'; color: PlayerColor }
   | { type: 'select_arranging_piece'; pos: Position; color: PlayerColor }
 
+interface StateChangePayload {
+  roomId: string
+  roomCode: string
+  matchId: string | null
+  playerId: string
+  actionId: string
+  actionSeq: number
+}
+
 interface OnlineStore {
-  // Session state
+  roomId: string | null
   roomCode: string | null
+  matchId: string | null
   isHost: boolean
   myPlayerId: string
   myColor: PlayerColor | null
@@ -54,309 +79,154 @@ interface OnlineStore {
   players: OnlinePlayer[]
   status: RoomStatus
   errorMessage: string | null
-
-  // Chat
+  reconnectDeadline: number | null
+  matchActionSeq: number
+  lastActionId: string | null
+  hasRestorableSession: boolean
   chatMessages: ChatMessage[]
-
-  // Internal
   _channel: RealtimeChannel | null
 
-  // Actions
   createRoom: (playerName: string) => Promise<void>
   joinRoom: (code: string, playerName: string) => Promise<void>
-  startGame: () => void
-  sendAction: (action: GameAction) => void
-  sendChatMessage: (text: string) => void
-  leaveRoom: () => void
+  restoreSession: (preferredCode?: string) => Promise<boolean>
+  startGame: () => Promise<void>
+  sendAction: (action: GameAction) => Promise<void>
+  sendChatMessage: (text: string) => Promise<void>
+  leaveRoom: () => Promise<void>
+  markDisconnected: () => Promise<void>
+  syncFromServer: (roomCode?: string) => Promise<void>
+  refreshRestorableSession: () => void
   reset: () => void
 }
 
-const COLOR_ORDER: PlayerColor[] = ['red', 'blue', 'yellow', 'green']
-
-const DEFAULT_STATE = {
+const DEFAULT_STATE: Omit<
+  OnlineStore,
+  | 'createRoom'
+  | 'joinRoom'
+  | 'restoreSession'
+  | 'startGame'
+  | 'sendAction'
+  | 'sendChatMessage'
+  | 'leaveRoom'
+  | 'markDisconnected'
+  | 'syncFromServer'
+  | 'refreshRestorableSession'
+  | 'reset'
+> = {
+  roomId: null,
   roomCode: null,
+  matchId: null,
   isHost: false,
   myPlayerId: '',
   myColor: null,
   myName: '',
-  players: [] as OnlinePlayer[],
-  status: 'idle' as RoomStatus,
-  errorMessage: null as string | null,
-  chatMessages: [] as ChatMessage[],
-  _channel: null as RealtimeChannel | null,
+  players: [],
+  status: 'idle',
+  errorMessage: null,
+  reconnectDeadline: null,
+  matchActionSeq: 0,
+  lastActionId: null,
+  hasRestorableSession: typeof window !== 'undefined' ? !!loadOnlineRoomSession() : false,
+  chatMessages: [],
+  _channel: null,
 }
 
-export const useOnlineStore = create<OnlineStore>((set, get) => ({
-  ...DEFAULT_STATE,
-
-  createRoom: async (playerName: string) => {
-    const myId = getPlayerId()
-    const code = generateRoomCode()
-
-    set({ status: 'creating', myPlayerId: myId, myName: playerName, roomCode: code, isHost: true, errorMessage: null })
-
-    try {
-      const channel = getRoomChannel(code)
-      setupChannelListeners(channel, set, get)
-
-      await channel.subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          await channel.track({
-            id: myId,
-            name: playerName,
-            is_host: true,
-          })
-          set({
-            _channel: channel,
-            status: 'waiting',
-            myColor: COLOR_ORDER[0],
-            players: [{ id: myId, name: playerName, color: COLOR_ORDER[0] }],
-          })
-        }
-      })
-    } catch (err) {
-      set({ status: 'error', errorMessage: 'Falha ao criar sala. Verifique suas credenciais Supabase.' })
-      console.error('Create room error:', err)
-    }
-  },
-
-  joinRoom: async (code: string, playerName: string) => {
-    const myId = getPlayerId()
-
-    set({ status: 'joining', myPlayerId: myId, myName: playerName, roomCode: code.toUpperCase(), isHost: false, errorMessage: null })
-
-    try {
-      const channel = getRoomChannel(code.toUpperCase())
-      setupChannelListeners(channel, set, get)
-
-      await channel.subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          await channel.track({
-            id: myId,
-            name: playerName,
-            is_host: false,
-          })
-          set({
-            _channel: channel,
-            status: 'waiting',
-          })
-        }
-      })
-    } catch (err) {
-      set({ status: 'error', errorMessage: 'Falha ao entrar na sala. Verifique o código.' })
-      console.error('Join room error:', err)
-    }
-  },
-
-  startGame: () => {
-    const { _channel, players, isHost } = get()
-    if (!_channel || !isHost) return
-    if (players.length < 2) return
-
-    // Assign colors in order and broadcast game start
-    const assignedPlayers = players.map((p, i) => ({
-      ...p,
-      color: COLOR_ORDER[i] as PlayerColor,
-    }))
-
-    // Host decides who starts — broadcast to all clients
-    const activeColors = assignedPlayers.map(p => p.color!)
-    const startingColor = activeColors[Math.floor(Math.random() * activeColors.length)]
-
-    _channel.send({
-      type: 'broadcast',
-      event: 'game_start',
-      payload: { players: assignedPlayers, startingColor },
-    })
-
-    // Also start locally (with the same startingColor)
-    startGameLocally(assignedPlayers, startingColor, set, get)
-
-    // System message
-    addSystemMessage(set, get, '🎮 O jogo começou!')
-  },
-
-  sendAction: (action: GameAction) => {
-    const { _channel, status } = get()
-    if (!_channel || status !== 'playing') return
-
-    // Execute locally first
-    executeAction(action)
-
-    // Broadcast to others
-    _channel.send({
-      type: 'broadcast',
-      event: 'game_action',
-      payload: action,
-    })
-  },
-
-  sendChatMessage: (text: string) => {
-    const { _channel, myPlayerId, myName, myColor, status } = get()
-    if (!_channel || (status !== 'waiting' && status !== 'playing')) return
-    if (!text.trim()) return
-
-    const msg: ChatMessage = {
-      id: crypto.randomUUID(),
-      playerId: myPlayerId,
-      playerName: myName,
-      playerColor: myColor,
-      text: text.trim(),
-      isSystem: false,
-      timestamp: Date.now(),
-    }
-
-    // Add locally
-    set(s => ({ chatMessages: [...s.chatMessages, msg] }))
-
-    // Broadcast
-    _channel.send({
-      type: 'broadcast',
-      event: 'chat_message',
-      payload: msg,
-    })
-  },
-
-  leaveRoom: () => {
-    const { _channel } = get()
-    if (_channel) {
-      _channel.untrack()
-      _channel.unsubscribe()
-    }
-    set({ ...DEFAULT_STATE })
-  },
-
-  reset: () => {
-    const { _channel } = get()
-    if (_channel) {
-      _channel.untrack()
-      _channel.unsubscribe()
-    }
-    set({ ...DEFAULT_STATE })
-  },
-}))
-
-// ─── Channel event listeners ────────────────────────────────────────────────
-
-function setupChannelListeners(
-  channel: RealtimeChannel,
-  set: (partial: Partial<OnlineStore> | ((s: OnlineStore) => Partial<OnlineStore>)) => void,
-  get: () => OnlineStore,
-) {
-  // Presence sync — update player list
-  channel.on('presence', { event: 'sync' }, () => {
-    const state = channel.presenceState()
-    const currentPlayers: OnlinePlayer[] = []
-
-    for (const key of Object.keys(state)) {
-      const entries = state[key] as unknown as Array<{ id: string; name: string; is_host: boolean }>
-      for (const entry of entries) {
-        const existingIdx = currentPlayers.findIndex(p => p.id === entry.id)
-        if (existingIdx === -1) {
-          const colorIdx = currentPlayers.length
-          currentPlayers.push({
-            id: entry.id,
-            name: entry.name,
-            color: colorIdx < COLOR_ORDER.length ? COLOR_ORDER[colorIdx] : null,
-          })
-        }
-      }
-    }
-
-    const myId = get().myPlayerId
-    const myPlayer = currentPlayers.find(p => p.id === myId)
-
-    set({
-      players: currentPlayers,
-      myColor: myPlayer?.color ?? null,
-    })
-  })
-
-  // Presence leave — player disconnected
-  channel.on('presence', { event: 'leave' }, ({ leftPresences }) => {
-    const { status } = get()
-    if (status === 'playing') {
-      const leftIds = (leftPresences as unknown as Array<{ id: string }>).map(p => p.id)
-      console.warn('Players disconnected:', leftIds)
-      // Don't fully stop — just update list, game can continue or show warning
-    }
-  })
-
-  // Game start event
-  channel.on('broadcast', { event: 'game_start' }, ({ payload }) => {
-    const { players: assignedPlayers, startingColor } = payload as {
-      players: OnlinePlayer[]
-      startingColor: PlayerColor
-    }
-    startGameLocally(assignedPlayers, startingColor, set, get)
-    addSystemMessage(set, get, '🎮 O jogo começou!')
-  })
-
-  // Game action event — apply remote player's action
-  channel.on('broadcast', { event: 'game_action' }, ({ payload }) => {
-    const action = payload as GameAction
-    executeAction(action)
-  })
-
-  // Chat message event
-  channel.on('broadcast', { event: 'chat_message' }, ({ payload }) => {
-    const msg = payload as ChatMessage
-    set(s => ({ chatMessages: [...s.chatMessages, msg] }))
-  })
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function startGameLocally(
-  assignedPlayers: OnlinePlayer[],
-  startingColor: PlayerColor,
-  set: (partial: Partial<OnlineStore> | ((s: OnlineStore) => Partial<OnlineStore>)) => void,
-  get: () => OnlineStore,
-) {
-  const myId = get().myPlayerId
-  const myPlayer = assignedPlayers.find(p => p.id === myId)
-
-  set({
-    players: assignedPlayers,
-    myColor: myPlayer?.color ?? null,
-    status: 'playing',
-  })
-
-  // Initialize the game store with the host-determined starting color
-  const gameStore = useGameStore.getState()
-  const gamePlayers = assignedPlayers
-    .filter(p => p.color !== null)
-    .map(p => ({
-      color: p.color!,
-      name: p.name,
+function gamePlayersFromOnlinePlayers(players: OnlinePlayer[]): Player[] {
+  return [...players]
+    .sort((a, b) => a.slotIndex - b.slotIndex)
+    .filter(player => player.color !== null)
+    .map(player => ({
+      color: player.color!,
+      name: player.name,
       timerMs: null,
       timeLeft: null,
       isActive: true,
     }))
+}
 
-  gameStore.initGame(gamePlayers, startingColor)
+function appendChatMessage(messages: ChatMessage[], message: ChatMessage): ChatMessage[] {
+  return [...messages, message].slice(-MAX_CHAT_MESSAGES)
+}
 
-  // Skip arranging phase for online games — go straight to playing
-  for (const p of gamePlayers) {
-    useGameStore.getState().markReady(p.color)
+function deriveStatus(
+  roomStatus: 'waiting' | 'playing' | 'paused' | 'finished',
+  snapshot: GameSnapshot | null,
+): RoomStatus {
+  if (roomStatus === 'waiting') return 'waiting'
+  if (roomStatus === 'paused') return 'paused'
+  if (roomStatus === 'finished' && snapshot?.phase !== 'finished') return 'error'
+  return roomStatus === 'finished' ? 'finished' : 'playing'
+}
+
+function persistSession(
+  roomId: string,
+  roomCode: string,
+  matchId: string | null,
+  playerId: string,
+  playerName: string,
+  status: 'waiting' | 'playing' | 'paused' | 'finished',
+) {
+  saveOnlineRoomSession({
+    roomId,
+    roomCode,
+    playerId,
+    playerName,
+    matchId,
+    status,
+    updatedAt: Date.now(),
+  })
+}
+
+function updateHasRestorableSession(
+  set: (partial: Partial<OnlineStore> | ((state: OnlineStore) => Partial<OnlineStore>)) => void,
+) {
+  set({ hasRestorableSession: !!loadOnlineRoomSession() })
+}
+
+function setGameSnapshot(snapshot: GameSnapshot | null) {
+  const gameStore = useGameStore.getState()
+
+  if (snapshot) {
+    gameStore.loadSnapshot(snapshot)
+  } else {
+    gameStore.resetGame()
   }
 }
 
-function addSystemMessage(
-  set: (partial: Partial<OnlineStore> | ((s: OnlineStore) => Partial<OnlineStore>)) => void,
-  _get: () => OnlineStore,
-  text: string,
-) {
-  const msg: ChatMessage = {
-    id: crypto.randomUUID(),
-    playerId: 'system',
-    playerName: 'Sistema',
-    playerColor: null,
-    text,
-    isSystem: true,
-    timestamp: Date.now(),
+function getSerializedSnapshot(snapshot: GameSnapshot): string {
+  return JSON.stringify(snapshot)
+}
+
+function getCurrentActionPlayerColor(snapshot: GameSnapshot): PlayerColor | null {
+  if (snapshot.phase === 'circle-return') {
+    return snapshot.capturedCircleEvent?.piece.color ?? null
   }
-  set(s => ({ chatMessages: [...s.chatMessages, msg] }))
+  if (snapshot.phase === 'arranging') {
+    return snapshot.arrangingCurrentPlayer
+  }
+  return snapshot.currentTurn
+}
+
+function isActionAllowed(action: GameAction, snapshot: GameSnapshot, myColor: PlayerColor | null): boolean {
+  if (!myColor) return false
+
+  switch (action.type) {
+    case 'mark_ready':
+      return snapshot.phase === 'arranging' && action.color === myColor && !snapshot.readyPlayers.includes(myColor)
+    case 'select_arranging_piece':
+      return snapshot.phase === 'arranging' && action.color === myColor && !snapshot.readyPlayers.includes(myColor)
+    case 'place_returned_circle':
+      return snapshot.phase === 'circle-return' && snapshot.capturedCircleEvent?.piece.color === myColor
+    case 'select_piece':
+    case 'apply_move':
+    case 'undo_last_step':
+    case 'confirm_move':
+      return snapshot.phase === 'playing' && snapshot.currentTurn === myColor
+    case 'swap_pieces':
+      return snapshot.phase === 'arranging' && action.color === myColor && !snapshot.readyPlayers.includes(myColor)
+    default:
+      return false
+  }
 }
 
 function executeAction(action: GameAction) {
@@ -389,3 +259,472 @@ function executeAction(action: GameAction) {
       break
   }
 }
+
+async function broadcastStateChange(channel: RealtimeChannel | null, payload: StateChangePayload): Promise<void> {
+  if (!channel) return
+
+  await channel.send({
+    type: 'broadcast',
+    event: 'state_changed',
+    payload,
+  })
+}
+
+async function syncSnapshotIntoStore(
+  roomCode: string,
+  currentPlayerId: string,
+  currentPlayerName: string,
+  set: (partial: Partial<OnlineStore> | ((state: OnlineStore) => Partial<OnlineStore>)) => void,
+  get: () => OnlineStore,
+): Promise<boolean> {
+  const snapshot = await fetchOnlineRoomSnapshot(roomCode)
+
+  if (!snapshot) {
+    set({ status: 'error', errorMessage: 'A sala não foi encontrada ou já foi encerrada.' })
+    return false
+  }
+
+  const myPlayer = snapshot.players.find(player => player.id === currentPlayerId)
+  if (!myPlayer) {
+    clearOnlineRoomSession()
+    updateHasRestorableSession(set)
+    set({
+      ...DEFAULT_STATE,
+      myPlayerId: currentPlayerId,
+      status: 'error',
+      errorMessage: 'Você não faz mais parte dessa sala.',
+      hasRestorableSession: false,
+    })
+    setGameSnapshot(null)
+    return false
+  }
+
+  const nextStatus = deriveStatus(snapshot.status, snapshot.gameSnapshot)
+
+  set({
+    roomId: snapshot.roomId,
+    roomCode: snapshot.roomCode,
+    matchId: snapshot.matchId,
+    isHost: snapshot.hostPlayerId === currentPlayerId,
+    myPlayerId: currentPlayerId,
+    myColor: myPlayer.color,
+    myName: currentPlayerName || myPlayer.name,
+    players: snapshot.players,
+    status: nextStatus,
+    errorMessage: null,
+    reconnectDeadline: snapshot.reconnectDeadline ? new Date(snapshot.reconnectDeadline).getTime() : null,
+    matchActionSeq: snapshot.matchActionSeq,
+    lastActionId: snapshot.lastActionId,
+  })
+
+  setGameSnapshot(snapshot.gameSnapshot)
+  persistSession(snapshot.roomId, snapshot.roomCode, snapshot.matchId, currentPlayerId, currentPlayerName || myPlayer.name, snapshot.status)
+  updateHasRestorableSession(set)
+
+  const currentRoom = get().roomCode
+  if (!currentRoom || currentRoom !== snapshot.roomCode) {
+    set({ roomCode: snapshot.roomCode })
+  }
+
+  return true
+}
+
+function addSystemMessage(
+  set: (partial: Partial<OnlineStore> | ((state: OnlineStore) => Partial<OnlineStore>)) => void,
+  text: string,
+) {
+  const message: ChatMessage = {
+    id: crypto.randomUUID(),
+    playerId: 'system',
+    playerName: 'Sistema',
+    playerColor: null,
+    text,
+    isSystem: true,
+    timestamp: Date.now(),
+  }
+
+  set(state => ({ chatMessages: appendChatMessage(state.chatMessages, message) }))
+}
+
+async function subscribeToRoomChannel(
+  roomCode: string,
+  playerId: string,
+  set: (partial: Partial<OnlineStore> | ((state: OnlineStore) => Partial<OnlineStore>)) => void,
+  get: () => OnlineStore,
+): Promise<RealtimeChannel> {
+  const existingChannel = get()._channel
+  if (existingChannel && get().roomCode === roomCode) {
+    return existingChannel
+  }
+
+  if (existingChannel) {
+    await existingChannel.untrack()
+    await existingChannel.unsubscribe()
+  }
+
+  const channel = getRoomChannel(roomCode)
+
+  channel.on('broadcast', { event: 'state_changed' }, async ({ payload }) => {
+    const message = payload as StateChangePayload
+    const currentState = get()
+
+    if (message.playerId === currentState.myPlayerId) return
+    if (message.actionId === currentState.lastActionId) return
+    if (message.actionSeq <= currentState.matchActionSeq) return
+
+    await currentState.syncFromServer(message.roomCode)
+  })
+
+  channel.on('broadcast', { event: 'chat_message' }, ({ payload }) => {
+    const message = payload as ChatMessage
+    set(state => ({ chatMessages: appendChatMessage(state.chatMessages, message) }))
+  })
+
+  channel.on('presence', { event: 'join' }, async ({ newPresences }) => {
+    const roomId = get().roomId
+    if (!roomId) return
+
+    const joinedPlayerIds = (newPresences as Array<{ player_id?: string }>).map(entry => entry.player_id).filter(Boolean) as string[]
+    for (const joinedPlayerId of joinedPlayerIds) {
+      await markPlayerConnected(roomId, joinedPlayerId)
+    }
+    await resumePausedMatchIfReady(roomId)
+    await get().syncFromServer(roomCode)
+  })
+
+  channel.on('presence', { event: 'leave' }, async ({ leftPresences }) => {
+    const roomId = get().roomId
+    if (!roomId) return
+
+    const leftPlayerIds = (leftPresences as Array<{ player_id?: string }>).map(entry => entry.player_id).filter(Boolean) as string[]
+    for (const leftPlayerId of leftPlayerIds) {
+      if (leftPlayerId === get().myPlayerId) continue
+      await disconnectOnlinePlayer(roomId, leftPlayerId)
+    }
+    await get().syncFromServer(roomCode)
+  })
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false
+
+    channel.subscribe(async status => {
+      if (settled) return
+
+      if (status === 'SUBSCRIBED') {
+        settled = true
+        await channel.track({ player_id: playerId })
+        resolve()
+        return
+      }
+
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        settled = true
+        reject(new Error('Falha ao conectar no canal online da sala.'))
+      }
+    })
+  })
+
+  set({ _channel: channel })
+  return channel
+}
+
+async function clearChannel(channel: RealtimeChannel | null) {
+  if (!channel) return
+
+  await channel.untrack()
+  await channel.unsubscribe()
+}
+
+export const useOnlineStore = create<OnlineStore>((set, get) => ({
+  ...DEFAULT_STATE,
+
+  createRoom: async (playerName: string) => {
+    const myPlayerId = getPlayerId()
+    const myName = sanitizePlayerName(playerName)
+
+    set({
+      status: 'creating',
+      myPlayerId,
+      myName,
+      errorMessage: null,
+    })
+
+    try {
+      const snapshot = await createRoomRecord(myPlayerId, myName)
+      await subscribeToRoomChannel(snapshot.roomCode, myPlayerId, set, get)
+      await markPlayerConnected(snapshot.roomId, myPlayerId)
+      await syncSnapshotIntoStore(snapshot.roomCode, myPlayerId, myName, set, get)
+      addSystemMessage(set, 'Sala criada. Compartilhe o código com os outros jogadores.')
+    } catch (error) {
+      console.error('Create room error:', error)
+      set({
+        status: 'error',
+        errorMessage: error instanceof Error ? error.message : 'Falha ao criar a sala online.',
+      })
+    }
+  },
+
+  joinRoom: async (code: string, playerName: string) => {
+    const myPlayerId = getPlayerId()
+    const roomCode = code.toUpperCase()
+    const myName = sanitizePlayerName(playerName)
+
+    set({
+      status: 'joining',
+      roomCode,
+      myPlayerId,
+      myName,
+      errorMessage: null,
+    })
+
+    try {
+      const snapshot = await joinRoomRecord(roomCode, myPlayerId, myName)
+      await subscribeToRoomChannel(snapshot.roomCode, myPlayerId, set, get)
+      await markPlayerConnected(snapshot.roomId, myPlayerId)
+      await resumePausedMatchIfReady(snapshot.roomId)
+      await syncSnapshotIntoStore(snapshot.roomCode, myPlayerId, myName, set, get)
+      addSystemMessage(set, 'Você entrou na sala.')
+    } catch (error) {
+      console.error('Join room error:', error)
+      set({
+        status: 'error',
+        errorMessage: error instanceof Error ? error.message : 'Falha ao entrar na sala.',
+      })
+    }
+  },
+
+  restoreSession: async (preferredCode?: string) => {
+    const session = loadOnlineRoomSession()
+    if (!session) {
+      updateHasRestorableSession(set)
+      return false
+    }
+
+    const roomCode = preferredCode?.toUpperCase() ?? session.roomCode
+
+    set({
+      status: 'syncing',
+      myPlayerId: session.playerId,
+      myName: session.playerName,
+      roomCode,
+      errorMessage: null,
+    })
+
+    try {
+      const snapshot = await joinRoomRecord(roomCode, session.playerId, session.playerName)
+      await subscribeToRoomChannel(snapshot.roomCode, session.playerId, set, get)
+      await markPlayerConnected(snapshot.roomId, session.playerId)
+      await resumePausedMatchIfReady(snapshot.roomId)
+      const restored = await syncSnapshotIntoStore(snapshot.roomCode, session.playerId, session.playerName, set, get)
+      return restored
+    } catch (error) {
+      console.error('Restore session error:', error)
+      clearOnlineRoomSession()
+      updateHasRestorableSession(set)
+      set({
+        status: 'error',
+        errorMessage: error instanceof Error ? error.message : 'Falha ao retomar a sala online.',
+      })
+      return false
+    }
+  },
+
+  startGame: async () => {
+    const { roomId, isHost, players, myPlayerId, _channel } = get()
+    if (!roomId || !isHost || !(players.length === 2 || players.length === 4)) return
+
+    const gamePlayers = gamePlayersFromOnlinePlayers(players)
+    if (!(gamePlayers.length === 2 || gamePlayers.length === 4)) return
+
+    const startingColor = gamePlayers[Math.floor(Math.random() * gamePlayers.length)].color
+    const gameStore = useGameStore.getState()
+    gameStore.initGame(gamePlayers, startingColor)
+    const snapshot = gameStore.getSnapshot()
+
+    try {
+      const roomSnapshot = await startOnlineMatch(roomId, myPlayerId, snapshot)
+      await syncSnapshotIntoStore(roomSnapshot.roomCode, myPlayerId, get().myName, set, get)
+      await broadcastStateChange(_channel, {
+        roomId,
+        roomCode: roomSnapshot.roomCode,
+        matchId: roomSnapshot.matchId,
+        playerId: myPlayerId,
+        actionId: crypto.randomUUID(),
+        actionSeq: roomSnapshot.matchActionSeq,
+      })
+      addSystemMessage(set, 'O jogo começou!')
+    } catch (error) {
+      console.error('Start game error:', error)
+      set({
+        status: 'error',
+        errorMessage: error instanceof Error ? error.message : 'Falha ao iniciar a partida online.',
+      })
+    }
+  },
+
+  sendAction: async (action: GameAction) => {
+    const {
+      roomId,
+      roomCode,
+      matchId,
+      matchActionSeq,
+      myColor,
+      myPlayerId,
+      _channel,
+      status,
+    } = get()
+
+    if (!roomId || !roomCode || !matchId || status !== 'playing') return
+
+    const gameStore = useGameStore.getState()
+    const previousSnapshot = gameStore.getSnapshot()
+    if (!isActionAllowed(action, previousSnapshot, myColor)) return
+
+    executeAction(action)
+
+    const nextSnapshot = useGameStore.getState().getSnapshot()
+    if (getSerializedSnapshot(previousSnapshot) === getSerializedSnapshot(nextSnapshot)) {
+      return
+    }
+
+    const actionId = crypto.randomUUID()
+
+    try {
+      const roomSnapshot = await persistOnlineSnapshot(roomId, matchId, matchActionSeq, actionId, nextSnapshot)
+      await syncSnapshotIntoStore(roomSnapshot.roomCode, myPlayerId, get().myName, set, get)
+      await broadcastStateChange(_channel, {
+        roomId,
+        roomCode,
+        matchId,
+        playerId: myPlayerId,
+        actionId,
+        actionSeq: roomSnapshot.matchActionSeq,
+      })
+    } catch (error) {
+      console.error('Send action error:', error)
+      useGameStore.getState().loadSnapshot(previousSnapshot)
+      set({
+        errorMessage: error instanceof Error ? error.message : 'Não foi possível sincronizar sua jogada.',
+      })
+      await get().syncFromServer(roomCode)
+    }
+  },
+
+  sendChatMessage: async (text: string) => {
+    const { _channel, myPlayerId, myName, myColor, status } = get()
+    if (!_channel || !text.trim()) return
+    if (!['waiting', 'playing', 'paused', 'finished'].includes(status)) return
+
+    const message: ChatMessage = {
+      id: crypto.randomUUID(),
+      playerId: myPlayerId,
+      playerName: myName,
+      playerColor: myColor,
+      text: text.trim(),
+      isSystem: false,
+      timestamp: Date.now(),
+    }
+
+    set(state => ({ chatMessages: appendChatMessage(state.chatMessages, message) }))
+
+    await _channel.send({
+      type: 'broadcast',
+      event: 'chat_message',
+      payload: message,
+    })
+  },
+
+  leaveRoom: async () => {
+    const { roomId, roomCode, matchId, myPlayerId, _channel, matchActionSeq } = get()
+
+    try {
+      if (roomId) {
+        await leaveOnlineRoom(roomId, myPlayerId)
+        await broadcastStateChange(_channel, {
+          roomId,
+          roomCode: roomCode ?? '',
+          matchId,
+          playerId: myPlayerId,
+          actionId: crypto.randomUUID(),
+          actionSeq: matchActionSeq,
+        })
+      }
+    } catch (error) {
+      console.error('Leave room error:', error)
+    } finally {
+      await clearChannel(_channel)
+      clearOnlineRoomSession()
+      useGameStore.getState().resetGame()
+      set({
+        ...DEFAULT_STATE,
+        myPlayerId: '',
+        hasRestorableSession: false,
+      })
+    }
+  },
+
+  markDisconnected: async () => {
+    const { roomId, roomCode, myPlayerId, _channel, status } = get()
+    if (!roomId || !roomCode || !['waiting', 'playing', 'paused'].includes(status)) return
+
+    try {
+      await disconnectOnlinePlayer(roomId, myPlayerId)
+      await broadcastStateChange(_channel, {
+        roomId,
+        roomCode,
+        matchId: get().matchId,
+        playerId: myPlayerId,
+        actionId: crypto.randomUUID(),
+        actionSeq: get().matchActionSeq,
+      })
+      set({ status: 'disconnected' })
+    } catch (error) {
+      console.error('Disconnect error:', error)
+    }
+  },
+
+  syncFromServer: async (roomCode?: string) => {
+    const targetCode = roomCode?.toUpperCase() ?? get().roomCode ?? loadOnlineRoomSession()?.roomCode
+    const currentPlayerId = get().myPlayerId || loadOnlineRoomSession()?.playerId || getPlayerId()
+    const currentPlayerName = get().myName || loadOnlineRoomSession()?.playerName || ''
+
+    if (!targetCode) {
+      return
+    }
+
+    set({ status: 'syncing', errorMessage: null })
+
+    try {
+      const synced = await syncSnapshotIntoStore(targetCode, currentPlayerId, currentPlayerName, set, get)
+      if (!synced) return
+
+      const gameSnapshot = useGameStore.getState().getSnapshot()
+      const actorColor = getCurrentActionPlayerColor(gameSnapshot)
+      const status = get().status
+
+      if (status === 'paused' && actorColor === get().myColor) {
+        addSystemMessage(set, 'A partida foi pausada enquanto um jogador reconecta.')
+      }
+    } catch (error) {
+      console.error('Sync room error:', error)
+      set({
+        status: 'error',
+        errorMessage: error instanceof Error ? error.message : 'Falha ao sincronizar a sala online.',
+      })
+    }
+  },
+
+  refreshRestorableSession: () => {
+    updateHasRestorableSession(set)
+  },
+
+  reset: () => {
+    clearOnlineRoomSession()
+    useGameStore.getState().resetGame()
+    void clearChannel(get()._channel)
+    set({
+      ...DEFAULT_STATE,
+      hasRestorableSession: false,
+    })
+  },
+}))

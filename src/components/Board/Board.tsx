@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useMemo } from 'react'
 import { useWindowWidth } from '../../lib/hooks'
 import { LayoutGroup, AnimatePresence, motion } from 'framer-motion'
 import type { Position } from '../../types'
@@ -32,8 +32,13 @@ export function Board() {
   const myColor = useOnlineStore(s => s.myColor)
   const sendAction = useOnlineStore(s => s.sendAction)
 
-  const isOnline = onlineStatus === 'playing'
-  const isMyTurn = !isOnline || currentTurn === myColor
+  const isOnline = onlineStatus === 'playing' || onlineStatus === 'paused' || onlineStatus === 'finished'
+  const activeInteractionColor = phase === 'circle-return'
+    ? capturedCircleEvent?.piece.color ?? null
+    : phase === 'arranging'
+      ? (myColor && !readyPlayers.includes(myColor) ? myColor : null)
+      : currentTurn
+  const isMyTurn = !isOnline || activeInteractionColor === myColor
 
   // Direct game store actions (for local mode)
   const selectPieceDirect = useGameStore(s => s.selectPiece)
@@ -41,28 +46,32 @@ export function Board() {
   const selectArrangingPieceDirect = useGameStore(s => s.selectArrangingPiece)
 
   // Circle return target slots
-  const circleReturnSlots: Position[] = capturedCircleEvent
-    ? getHomeBaseCells(capturedCircleEvent.piece.color).filter(pos =>
-        !board[pos.row]?.[pos.col]?.piece
-      )
-    : []
+  const circleReturnSlots: Position[] = useMemo(() => (
+    capturedCircleEvent
+      ? getHomeBaseCells(capturedCircleEvent.piece.color).filter(pos =>
+          !board[pos.row]?.[pos.col]?.piece
+        )
+      : []
+  ), [board, capturedCircleEvent])
 
   // Arranging: highlight base cells for the current arranging player
-  const arrangingBaseCells: Position[] = phase === 'arranging'
-    ? (() => {
-        if (isOnline && myColor) {
-          return readyPlayers.includes(myColor) ? [] : getHomeBaseCells(myColor)
-        }
-        return arrangingCurrentPlayer ? getHomeBaseCells(arrangingCurrentPlayer) : []
-      })()
-    : []
+  const arrangingBaseCells: Position[] = useMemo(() => (
+    phase === 'arranging'
+      ? (() => {
+          if (isOnline && myColor) {
+            return readyPlayers.includes(myColor) ? [] : getHomeBaseCells(myColor)
+          }
+          return arrangingCurrentPlayer ? getHomeBaseCells(arrangingCurrentPlayer) : []
+        })()
+      : []
+  ), [arrangingCurrentPlayer, isOnline, myColor, phase, readyPlayers])
 
   const handleCellClick = useCallback((pos: Position) => {
     // ─── Arranging phase ───────────────────────
     if (phase === 'arranging') {
       if (isOnline) {
         if (!myColor || readyPlayers.includes(myColor)) return
-        sendAction({ type: 'select_arranging_piece', pos, color: myColor })
+        void sendAction({ type: 'select_arranging_piece', pos, color: myColor })
       } else {
         if (!arrangingCurrentPlayer || readyPlayers.includes(arrangingCurrentPlayer)) return
         selectArrangingPieceDirect(pos, arrangingCurrentPlayer)
@@ -73,9 +82,9 @@ export function Board() {
     // ─── Circle return phase ───────────────────
     if (phase === 'circle-return') {
       const isTarget = circleReturnSlots.some(s => posEq(s, pos))
-      if (isTarget) {
+        if (isTarget) {
         if (isOnline && isMyTurn) {
-          sendAction({ type: 'place_returned_circle', pos })
+          void sendAction({ type: 'place_returned_circle', pos })
         } else if (!isOnline) {
           placeReturnedCircleDirect(pos)
         }
@@ -86,7 +95,7 @@ export function Board() {
     // ─── Playing phase ─────────────────────────
     if (phase === 'playing') {
       if (isOnline && isMyTurn) {
-        sendAction({ type: 'select_piece', pos })
+        void sendAction({ type: 'select_piece', pos })
       } else if (!isOnline) {
         selectPieceDirect(pos)
       }
@@ -102,24 +111,37 @@ export function Board() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const online = useOnlineStore.getState()
-      const isOnlineNow = online.status === 'playing'
-      const curTurn = useGameStore.getState().currentTurn
-      const myTurn = !isOnlineNow || curTurn === online.myColor
+      const phaseNow = useGameStore.getState().phase
+      const isOnlineNow = online.status === 'playing' || online.status === 'paused' || online.status === 'finished'
+      const currentSnapshot = useGameStore.getState().getSnapshot()
+      const actorColor = currentSnapshot.phase === 'circle-return'
+        ? currentSnapshot.capturedCircleEvent?.piece.color ?? null
+        : currentSnapshot.phase === 'arranging'
+          ? (online.myColor && !currentSnapshot.readyPlayers.includes(online.myColor) ? online.myColor : null)
+          : currentSnapshot.currentTurn
+      const myTurn = !isOnlineNow || actorColor === online.myColor
+      const target = e.target as HTMLElement | null
+
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return
+      }
 
       // Don't handle keyboard during arranging
-      if (useGameStore.getState().phase === 'arranging') return
+      if (phaseNow === 'arranging') return
       if (!myTurn) return
 
       if (e.key === 'Enter' && path.length >= 2) {
+        e.preventDefault()
         if (isOnlineNow) {
-          sendActionForKeys({ type: 'confirm_move' })
+          void sendActionForKeys({ type: 'confirm_move' })
         } else {
           confirmMove()
         }
       }
       if (e.key === 'Backspace') {
+        e.preventDefault()
         if (isOnlineNow) {
-          sendActionForKeys({ type: 'undo_last_step' })
+          void sendActionForKeys({ type: 'undo_last_step' })
         } else {
           undoLastStep()
         }
@@ -250,4 +272,3 @@ export function Board() {
     </div>
   )
 }
-

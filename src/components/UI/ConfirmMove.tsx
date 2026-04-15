@@ -12,7 +12,7 @@ export function ConfirmMove() {
 
   const handleConfirm = () => {
     if (isOnline) {
-      sendAction({ type: 'confirm_move' })
+      void sendAction({ type: 'confirm_move' })
     } else {
       confirmMove()
     }
@@ -20,7 +20,7 @@ export function ConfirmMove() {
 
   const handleUndo = () => {
     if (isOnline) {
-      sendAction({ type: 'undo_last_step' })
+      void sendAction({ type: 'undo_last_step' })
     } else {
       undoLastStep()
     }

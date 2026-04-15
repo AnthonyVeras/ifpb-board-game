@@ -41,12 +41,68 @@ export interface GameState {
   pathJumpedOver: Position[][]  // for each jump in path, which cells were between
   phase: GamePhase
   winner: PlayerColor | null
-  capturedCircleEvent: { piece: Piece; capturedBy: PlayerColor } | null
-  lastMove: { from: Position; path: Position[]; color: PlayerColor } | null
+  capturedCircleEvent: CapturedCircleEvent | null
+  lastMove: MoveRecord | null
 }
 
 export interface MoveOption {
   to: Position
   isJump: boolean
   jumpedOver?: Position[]  // cells between from and to
+}
+
+export interface CapturedCircleEvent {
+  piece: Piece
+  capturedBy: PlayerColor
+}
+
+export interface MoveRecord {
+  from: Position
+  path: Position[]
+  color: PlayerColor
+}
+
+export interface GameSnapshot extends GameState {
+  arrangingSelectedPiece: Position | null
+  readyPlayers: PlayerColor[]
+  arrangingCurrentPlayer: PlayerColor | null
+  currentMoveOptions: MoveOption[]
+  pendingCapturedCircles: CapturedCircleEvent[]
+  pathJumpedOverSets: Position[][]
+}
+
+export type OnlineRoomLifecycleStatus = 'waiting' | 'playing' | 'paused' | 'finished'
+
+export interface OnlinePlayerState {
+  id: string
+  name: string
+  normalizedName: string
+  slotIndex: number
+  color: PlayerColor | null
+  isHost: boolean
+  isConnected: boolean
+  isReady: boolean
+}
+
+export interface OnlineRoomSnapshot {
+  roomId: string
+  roomCode: string
+  hostPlayerId: string
+  status: OnlineRoomLifecycleStatus
+  reconnectDeadline: string | null
+  players: OnlinePlayerState[]
+  matchId: string | null
+  matchActionSeq: number
+  lastActionId: string | null
+  gameSnapshot: GameSnapshot | null
+}
+
+export interface OnlineRoomSession {
+  roomId: string
+  roomCode: string
+  playerId: string
+  playerName: string
+  matchId: string | null
+  status: OnlineRoomLifecycleStatus
+  updatedAt: number
 }

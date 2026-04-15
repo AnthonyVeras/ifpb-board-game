@@ -1,7 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useWindowWidth } from '../lib/hooks'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
+import type { PlayerColor } from '../types'
+import { loadOnlineRoomSession } from '../lib/onlineSession'
 import { useGameStore } from '../store/gameStore'
 import { useOnlineStore } from '../store/onlineStore'
 import { Board } from '../components/Board/Board'
@@ -19,44 +21,98 @@ const TURN_LABELS: Record<string, string> = {
 
 export function GamePage() {
   const navigate = useNavigate()
+  const persistedSession = loadOnlineRoomSession()
+  const attemptedRestoreRef = useRef(false)
   const {
     phase, players, currentTurn, winner, resetGame,
-    readyPlayers, arrangingCurrentPlayer, markReady,
+    readyPlayers, arrangingCurrentPlayer, markReady, capturedCircleEvent,
   } = useGameStore()
   const {
-    status: onlineStatus, myColor, leaveRoom, players: onlinePlayers,
-    sendAction,
+    status: onlineStatus, myColor, leaveRoom, players: onlinePlayers, reconnectDeadline,
+    sendAction, restoreSession,
   } = useOnlineStore()
 
   const windowWidth = useWindowWidth()
   const isMobile = windowWidth < 900
 
-  const isOnline = onlineStatus === 'playing'
-  const isMyTurn = !isOnline || currentTurn === myColor
+  const isOnline = onlineStatus === 'playing' || onlineStatus === 'paused' || onlineStatus === 'finished'
+  const activeInteractionColor = phase === 'circle-return'
+    ? capturedCircleEvent?.piece.color ?? null
+    : phase === 'arranging'
+      ? (myColor && !readyPlayers.includes(myColor) ? myColor : null)
+      : currentTurn
+  const isMyTurn = !isOnline || activeInteractionColor === myColor
 
   useEffect(() => {
-    if (phase === 'setup') navigate('/')
-  }, [phase, navigate])
+    if (phase !== 'setup') return
+
+    if (persistedSession && !attemptedRestoreRef.current) {
+      attemptedRestoreRef.current = true
+      void restoreSession(persistedSession.roomCode)
+      return
+    }
+
+    if (onlineStatus === 'syncing' || onlineStatus === 'joining') {
+      return
+    }
+
+    if (persistedSession && onlineStatus === 'waiting') {
+      navigate(`/lobby/${persistedSession.roomCode}`)
+      return
+    }
+
+    if (persistedSession && ['playing', 'paused', 'finished'].includes(onlineStatus)) {
+      return
+    }
+
+    if (!persistedSession) {
+      navigate('/')
+    }
+  }, [navigate, onlineStatus, persistedSession, phase, restoreSession])
+
+  useEffect(() => {
+    if (!isOnline || !['playing', 'paused'].includes(onlineStatus)) return
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [isOnline, onlineStatus])
 
   if (phase === 'setup' || !players.length) return null
 
   const currentPlayer = players.find(p => p.color === currentTurn)
-  const turnColor = COLOR_HEX[currentTurn]
+  const interactionColor = activeInteractionColor ?? currentTurn
+  const turnColor = COLOR_HEX[interactionColor]
+  const interactionLabel = interactionColor ? TURN_LABELS[interactionColor] : 'Jogador'
+  const reconnectDeadlineLabel = onlineStatus === 'paused' && reconnectDeadline
+    ? new Date(reconnectDeadline).toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : null
 
   // Find the online player name for current turn
   const onlinePlayerName = isOnline
-    ? onlinePlayers.find(p => p.color === currentTurn)?.name
+    ? onlinePlayers.find(p => p.color === interactionColor)?.name
     : undefined
 
-  const handleHome = () => {
-    if (isOnline) leaveRoom()
+  const handleHome = async () => {
+    if (isOnline) {
+      const shouldLeave = window.confirm('Sair agora vai encerrar sua sessão online atual. Deseja continuar?')
+      if (!shouldLeave) return
+      await leaveRoom()
+    }
     resetGame()
     navigate('/')
   }
 
-  const handlePlayAgain = () => {
+  const handlePlayAgain = async () => {
     if (isOnline) {
-      leaveRoom()
+      await leaveRoom()
       resetGame()
       navigate('/lobby')
     } else {
@@ -65,11 +121,11 @@ export function GamePage() {
     }
   }
 
-  const handleMarkReady = (color: string) => {
+  const handleMarkReady = (color: PlayerColor) => {
     if (isOnline) {
-      sendAction({ type: 'mark_ready', color: color as any })
+      void sendAction({ type: 'mark_ready', color })
     } else {
-      markReady(color as any)
+      markReady(color)
     }
   }
 
@@ -96,7 +152,7 @@ export function GamePage() {
       }}>
         <button
           className="btn btn-ghost"
-          onClick={handleHome}
+          onClick={() => { void handleHome() }}
           style={{ padding: '8px 14px', fontSize: 13 }}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -181,11 +237,11 @@ export function GamePage() {
                 fontSize: 14,
               }}>
                 {phase === 'circle-return'
-                  ? 'Escolha onde o círculo retorna'
+                  ? `${onlinePlayerName ?? interactionLabel} escolhe onde o círculo retorna`
                   : isOnline
                     ? isMyTurn
                       ? 'Sua vez!'
-                      : `Vez de ${onlinePlayerName ?? TURN_LABELS[currentTurn]}`
+                      : `Vez de ${onlinePlayerName ?? interactionLabel}`
                     : `Vez de ${currentPlayer?.name ?? TURN_LABELS[currentTurn]}`
                 }
               </span>
@@ -204,11 +260,13 @@ export function GamePage() {
             gap: 6,
             padding: '6px 14px',
             borderRadius: 8,
-            backgroundColor: 'rgba(67,160,71,0.1)',
-            border: '1px solid rgba(67,160,71,0.25)',
+            backgroundColor: onlineStatus === 'paused' ? 'rgba(253,216,53,0.12)' : 'rgba(67,160,71,0.1)',
+            border: onlineStatus === 'paused'
+              ? '1px solid rgba(253,216,53,0.35)'
+              : '1px solid rgba(67,160,71,0.25)',
             fontSize: 12,
             fontWeight: 600,
-            color: 'var(--green)',
+            color: onlineStatus === 'paused' ? 'var(--yellow)' : 'var(--green)',
           }}>
             <motion.div
               animate={{ opacity: [0.4, 1, 0.4] }}
@@ -217,15 +275,15 @@ export function GamePage() {
                 width: 6,
                 height: 6,
                 borderRadius: '50%',
-                backgroundColor: 'var(--green)',
+                backgroundColor: onlineStatus === 'paused' ? 'var(--yellow)' : 'var(--green)',
               }}
             />
-            Online
+            {onlineStatus === 'paused' ? `Pausado${reconnectDeadlineLabel ? ` até ${reconnectDeadlineLabel}` : ''}` : 'Online'}
           </div>
         )}
 
         {/* Not-my-turn overlay badge */}
-        {isOnline && !isMyTurn && phase === 'playing' && (
+        {isOnline && !isMyTurn && phase !== 'finished' && (
           <div style={{
             padding: '6px 14px',
             borderRadius: 8,
@@ -265,7 +323,7 @@ export function GamePage() {
         {/* Board + controls */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
           {/* View-only overlay when not my turn in online mode (only during playing) */}
-          {isOnline && !isMyTurn && phase === 'playing' && (
+          {isOnline && !isMyTurn && phase !== 'finished' && (
             <div style={{
               position: 'absolute',
               inset: 0,
