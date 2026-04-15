@@ -118,9 +118,16 @@ body {
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: var(--radius-md);
   font-size: 15px;
-  padding: 12px 24px;
+  padding: 14px 24px;
   position: relative;
   overflow: hidden;
+}
+
+@media (max-width: 600px) {
+  .btn {
+    padding: 16px 20px;
+    font-size: 16px;
+  }
 }
 
 .btn::after {
@@ -238,4 +245,16 @@ body {
 
 .piece-wrapper:hover {
   filter: brightness(1.15);
+}
+
+.player-panel-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+@media (max-width: 900px) {
+  .player-panel-list {
+    grid-template-columns: 1fr 1fr;
+  }
 }

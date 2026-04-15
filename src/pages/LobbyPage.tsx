@@ -124,7 +124,7 @@ export function LobbyPage() {
         animate={{ opacity: 1, y: 0 }}
         className="card"
         style={{
-          padding: '40px 44px',
+          padding: 'clamp(24px, 5vw, 40px) clamp(20px, 5vw, 44px)',
           width: '100%',
           maxWidth: 480,
           textAlign: 'center',
@@ -199,7 +199,7 @@ export function LobbyPage() {
             </div>
 
             {/* Mode buttons */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <button
                 onClick={() => setMode('create')}
                 disabled={!configured || !playerName.trim()}
@@ -259,7 +259,7 @@ export function LobbyPage() {
                 disabled={status === 'creating' || !playerName.trim()}
                 style={{
                   width: '100%',
-                  padding: '14px 0',
+                  padding: '15px 0',
                   fontSize: 16,
                   fontWeight: 700,
                   opacity: status === 'creating' ? 0.6 : 1,
@@ -322,7 +322,7 @@ export function LobbyPage() {
                 onClick={handleJoin}
                 style={{
                   width: '100%',
-                  padding: '13px 0',
+                  padding: '15px 0',
                   fontSize: 15,
                   opacity: (joinCode.length >= 6 && playerName.trim()) ? 1 : 0.4,
                   cursor: (joinCode.length >= 6 && playerName.trim()) ? 'pointer' : 'not-allowed',
@@ -528,11 +528,11 @@ export function LobbyPage() {
             </div>
 
             {/* Action buttons */}
-            <div style={{ display: 'flex', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
               <button
                 className="btn btn-ghost"
                 onClick={() => { leaveRoom(); setMode('none') }}
-                style={{ flex: 1, padding: '12px 0', fontSize: 14 }}
+                style={{ flex: 1, padding: '14px 0', fontSize: 14 }}
               >
                 Sair
               </button>
@@ -544,7 +544,7 @@ export function LobbyPage() {
                   disabled={!canStart}
                   style={{
                     flex: 2,
-                    padding: '12px 0',
+                    padding: '14px 0',
                     fontSize: 16,
                     fontWeight: 700,
                     opacity: canStart ? 1 : 0.4,

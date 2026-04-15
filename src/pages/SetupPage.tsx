@@ -57,7 +57,7 @@ export function SetupPage() {
         transition={{ duration: 0.5 }}
         className="card"
         style={{
-          padding: '40px 44px',
+          padding: 'clamp(24px, 5vw, 40px) clamp(20px, 5vw, 44px)',
           width: '100%',
           maxWidth: 480,
           boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
@@ -93,7 +93,7 @@ export function SetupPage() {
                 className={playerCount === n ? 'btn btn-primary' : 'btn btn-secondary'}
                 style={{
                   flex: 1,
-                  padding: '10px 0',
+                  padding: '12px 0',
                   fontSize: 18,
                   fontWeight: 700,
                 }}
@@ -139,7 +139,7 @@ export function SetupPage() {
                   placeholder={COLOR_LABELS[c]}
                   style={{
                     flex: 1,
-                    padding: '9px 14px',
+                    padding: '12px 14px',
                     borderRadius: 8,
                     border: '1px solid var(--border-medium)',
                     backgroundColor: 'var(--bg-elevated)',
@@ -177,7 +177,7 @@ export function SetupPage() {
                 onClick={() => setTimerMs(opt.value)}
                 style={{
                   flex: 1,
-                  padding: '9px 0',
+                  padding: '12px 0',
                   borderRadius: 8,
                   border: timerMs === opt.value
                     ? '2px solid var(--blue)'
@@ -200,18 +200,18 @@ export function SetupPage() {
         </div>
 
         {/* Action buttons */}
-        <div style={{ display: 'flex', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
           <button
             className="btn btn-ghost"
             onClick={() => navigate('/')}
-            style={{ flex: 1, padding: '13px 0', fontSize: 15 }}
+            style={{ flex: 1, padding: '14px 0', fontSize: 15 }}
           >
             ← Voltar
           </button>
           <button
             className="btn btn-primary"
             onClick={handleStart}
-            style={{ flex: 2, padding: '13px 0', fontSize: 16, fontWeight: 700 }}
+            style={{ flex: 2, padding: '14px 0', fontSize: 16, fontWeight: 700 }}
           >
             Iniciar Jogo →
           </button>
